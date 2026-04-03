@@ -1,0 +1,31 @@
+name: GGIV Nightly Radar
+
+on:
+  schedule:
+    # Si attiva ogni notte all'01:00 UTC (che sono le 03:00 in Italia)
+    - cron: '0 1 * * *'
+  workflow_dispatch: # Questo trucco ti permette di farlo partire anche a mano con un tasto!
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Preleva il codice
+      uses: actions/checkout@v3
+
+    - name: Prepara Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Installa le librerie
+      run: pip install -r requirements.txt
+
+    - name: Forgia la chiave Google dal Caveau
+      env:
+        GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+      run: echo "$GOOGLE_CREDENTIALS" > chiave_google.json
+
+    - name: Lancia il Radar GGIV
+      run: python news_bot.py
