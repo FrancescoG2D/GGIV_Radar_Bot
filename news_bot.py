@@ -29,17 +29,19 @@ STRUTTURA GOOGLE SHEET:
     Flag_Ammissione, Flag_Delisting
 """
 
+import streamlit as st
 import yfinance as yf
 import gspread
+from google.oauth2.service_account import Credentials
 import requests
 import time
 import math
+import json
 from datetime import datetime, timedelta
 
-print("=" * 55)
-print("  GGIV UPDATE TOOL v2.0")
-print("  Vault Algorithm — Modulo di Aggiornamento")
-print("=" * 55)
+st.title("⬡ GGIV UPDATE TOOL v2.0")
+st.caption("Vault Algorithm — Modulo di Aggiornamento Google Sheets")
+st.markdown("---")
 
 # ══════════════════════════════════════════════════════════════
 # CONFIGURAZIONE
@@ -74,12 +76,20 @@ SUFFIX_ASHARE = [".SS", ".SZ"]  # Shanghai e Shenzhen
 # ══════════════════════════════════════════════════════════════
 
 try:
-    gc = gspread.service_account(filename='chiave_google.json')
+    # Legge le credenziali dai Secrets di Streamlit Cloud
+    # Configura nei Secrets: [gcp_service_account] con il contenuto del tuo JSON
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    scopes = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    gc = gspread.authorize(creds)
     sh = gc.open(NOME_FILE_GOOGLE)
-    print(f"✅ Connesso a Google Sheets: {NOME_FILE_GOOGLE}")
+    st.success(f"✅ Connesso a Google Sheets: {NOME_FILE_GOOGLE}")
 except Exception as e:
-    print(f"❌ ERRORE CONNESSIONE: {e}")
-    exit()
+    st.error(f"❌ ERRORE CONNESSIONE: {e}")
+    st.stop()
 
 # ══════════════════════════════════════════════════════════════
 # 2. FUNZIONI DI SUPPORTO
@@ -299,22 +309,22 @@ def verifica_ammissione(market_cap, adtv, free_float_pct, ticker) -> str:
 # 3. MOTORE PRINCIPALE — SCANSIONE FOGLI
 # ══════════════════════════════════════════════════════════════
 
-for nome_foglio in FOGLI:
-    print(f"\n{'='*55}")
-    print(f"  SCANSIONE FOGLIO: {nome_foglio}")
-    print(f"{'='*55}")
+if st.button("🚀 AVVIA AGGIORNAMENTO", use_container_width=True, type="primary"):
+ st.markdown("---")
+ for nome_foglio in FOGLI:
+    st.markdown(f"### 📡 SCANSIONE FOGLIO: {nome_foglio}")
 
     try:
         ws = sh.worksheet(nome_foglio)
     except Exception:
-        print(f"⚠️  Foglio '{nome_foglio}' non trovato. Salto.")
+        st.warning(f"⚠️ Foglio '{nome_foglio}' non trovato. Salto.")
         continue
 
     records    = ws.get_all_records()
     intestazioni = ws.row_values(1)
 
     if not records:
-        print(f"   Foglio vuoto.")
+        st.info("Foglio vuoto.")
         continue
 
     # ── Mappa indici colonne ──────────────────────────────────
@@ -346,23 +356,18 @@ for nome_foglio in FOGLI:
     # Avvisa se mancano colonne
     mancanti = [n for n, i in COLONNE_RICHIESTE.items() if i is None]
     if mancanti:
-        print(f"\n⚠️  COLONNE MANCANTI nel foglio '{nome_foglio}':")
-        for m in mancanti:
-            print(f"   → Aggiungi la colonna: {m}")
-        print("   Il tool scriverà solo nelle colonne esistenti.")
+        st.warning(f"⚠️ COLONNE MANCANTI nel foglio '{nome_foglio}': {', '.join(mancanti)}. Il tool scriverà solo nelle colonne esistenti.")
 
     # ── Calcola Pat_max per normalizzazione GES ───────────────
     # (solo per Database)
     pat_max_globale = 1  # default
     if nome_foglio == "Database":
-        print("\n   Calcolo Pat_max per normalizzazione GES...")
         pat_totali = []
         for riga in records:
             g = int(riga.get("Brevetti_Granted", 0) or 0)
             p = int(riga.get("Brevetti_Pending", 0) or 0)
             pat_totali.append(g + p)
         pat_max_globale = max(pat_totali) if pat_totali else 1
-        print(f"   Pat_max attuale: {pat_max_globale}")
 
     # ── Scansione riga per riga ───────────────────────────────
     aggiornamenti_batch = []  # Raccoglie tutti gli update per batch write
@@ -376,11 +381,11 @@ for nome_foglio in FOGLI:
         if not ticker:
             continue
 
-        print(f"\n  [{riga_num-1}/{len(records)}] {ticker} — {azienda}")
+        st.write(f"**[{riga_num-1}/{len(records)}]** `{ticker}` — {azienda}")
 
         # ── Blocco A-share ────────────────────────────────────
         if is_ashare(ticker):
-            print(f"    🚫 A-SHARE BLOCCATO — ticker {ticker} non ammesso (Rulebook 6.1)")
+            st.error(f"🚫 A-SHARE BLOCCATO — {ticker} non ammesso (Rulebook 6.1)")
             aggiornamenti_batch.append({
                 "riga": riga_num,
                 "Flag_Ammissione": "FAIL — A-Share cinese (Rulebook 6.1)",
@@ -389,12 +394,12 @@ for nome_foglio in FOGLI:
             continue
 
         # ── Yahoo Finance ─────────────────────────────────────
-        print(f"    📡 Yahoo Finance...")
+
         dati_yf = get_dati_yahoo(ticker)
         time.sleep(0.8)  # Rate limit rispettoso
 
         if dati_yf["errore"]:
-            print(f"    ⚠️  Errore Yahoo: {dati_yf['errore'][:60]}")
+            st.caption(f"⚠️ Yahoo: {dati_yf['errore'][:80]}")
 
         # Formatta Market Cap per leggibilità
         mc = dati_yf["market_cap"]
@@ -404,21 +409,19 @@ for nome_foglio in FOGLI:
         ff     = dati_yf["free_float_pct"]
         ff_str = f"{ff:.1f}%" if ff else "N/D"
 
-        print(f"    Market Cap: ${mc_str}  |  ADTV: ${adtv_str}  |  Float: {ff_str}")
+        st.caption(f"Market Cap: ${mc_str} | ADTV: ${adtv_str} | Float: {ff_str}")
 
         # ── Brevetti USPTO (solo Database) ───────────────────
         brevetti_granted = int(riga.get("Brevetti_Granted", 0) or 0)
         brevetti_pending = int(riga.get("Brevetti_Pending", 0) or 0)
 
         if nome_foglio == "Database" and azienda:
-            print(f"    🔍 USPTO brevetti per '{azienda}'...")
+
             brev = get_brevetti_uspto(azienda)
-            if brev["errore"]:
-                print(f"    ⚠️  USPTO: {brev['errore'][:60]}")
-            else:
+            if not brev["errore"]:
                 brevetti_granted = brev["granted"]
                 brevetti_pending = brev["pending"]
-                print(f"    Brevetti Granted: {brevetti_granted}  |  Pending: {brevetti_pending}")
+                st.caption(f"Brevetti Granted: {brevetti_granted} | Pending: {brevetti_pending}")
 
             # Ricalcola Pat_max con dati aggiornati
             tot_brev = brevetti_granted + brevetti_pending
@@ -463,16 +466,20 @@ for nome_foglio in FOGLI:
                 brevetti=brevetti_granted + brevetti_pending,
                 pat_max=pat_max_globale,
             )
-            print(f"    GES Score: {ges_score:.4f} | Rev: {rev_pct*100:.1f}% ({fonte_rev}) | α={GES_COEFFICIENTI[tier]['alpha']} β={GES_COEFFICIENTI[tier]['beta']}")
+            st.caption(f"GES: {ges_score:.4f} | Rev: {rev_pct*100:.1f}% ({fonte_rev})")
 
         # ── Flag Ammissione ───────────────────────────────────
         flag_amm = verifica_ammissione(mc, adtv, ff, ticker)
         flag_del = "ALERT" if dati_yf["delisting"] else "OK"
 
-        status_icon = "✅" if flag_amm == "PASS" else ("⚠️" if "WARN" in flag_amm else "❌")
-        print(f"    {status_icon} Ammissione: {flag_amm}")
+        if flag_amm == "PASS":
+            st.caption(f"✅ {flag_amm}")
+        elif "WARN" in flag_amm:
+            st.caption(f"⚠️ {flag_amm}")
+        else:
+            st.error(f"❌ {flag_amm}")
         if flag_del == "ALERT":
-            print(f"    🚨 Delisting Alert!")
+            st.error(f"🚨 DELISTING ALERT: {ticker}")
 
         # ── Raccoglie aggiornamento ───────────────────────────
         update = {
@@ -494,7 +501,7 @@ for nome_foglio in FOGLI:
     # ── Scrittura batch su Google Sheets ─────────────────────
     # Raggruppa tutti gli update in una singola chiamata per
     # minimizzare le API call a Google Sheets
-    print(f"\n  📝 Scrittura su Google Sheets ({len(aggiornamenti_batch)} righe)...")
+    st.info(f"📝 Scrittura su Google Sheets ({len(aggiornamenti_batch)} righe)...")
 
     for upd in aggiornamenti_batch:
         riga_n = upd["riga"]
@@ -508,15 +515,13 @@ for nome_foglio in FOGLI:
                 ws.update_cell(riga_n, idx, valore)
                 time.sleep(0.15)  # Evita rate limit Google Sheets API
             except Exception as e:
-                print(f"    ❌ Errore scrittura {campo} riga {riga_n}: {e}")
+                st.warning(f"Errore scrittura {campo} riga {riga_n}: {e}")
 
-    print(f"  ✅ Foglio '{nome_foglio}' aggiornato.")
+    st.success(f"✅ Foglio '{nome_foglio}' aggiornato.")
 
 # ══════════════════════════════════════════════════════════════
 # 4. RIEPILOGO FINALE
 # ══════════════════════════════════════════════════════════════
-print(f"\n{'='*55}")
-print(f"  MISSIONE COMPLETATA — {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-print(f"  Prossimo run consigliato: domani mattina")
-print(f"  (o prima di ogni ribilanciamento trimestrale)")
-print(f"{'='*55}")
+st.markdown("---")
+st.success(f"✅ MISSIONE COMPLETATA — {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+st.info("Prossimo run consigliato: domani mattina o prima di ogni ribilanciamento trimestrale.")
