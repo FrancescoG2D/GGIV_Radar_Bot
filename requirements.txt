@@ -1,2 +1,5 @@
+streamlit
 yfinance
 gspread
+google-auth
+requests
