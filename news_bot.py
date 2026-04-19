@@ -503,6 +503,9 @@ if st.button("🚀 AVVIA AGGIORNAMENTO", use_container_width=True, type="primary
     # minimizzare le API call a Google Sheets
     st.info(f"📝 Scrittura su Google Sheets ({len(aggiornamenti_batch)} righe)...")
 
+    # Batch update: una sola chiamata API per tutto il foglio
+    # Evita il 429 Quota Exceeded che si verifica con update_cell singole
+    batch_data = []
     for upd in aggiornamenti_batch:
         riga_n = upd["riga"]
         for campo, valore in upd.items():
@@ -510,12 +513,36 @@ if st.button("🚀 AVVIA AGGIORNAMENTO", use_container_width=True, type="primary
                 continue
             idx = COLONNE_RICHIESTE.get(campo)
             if idx is None:
-                continue  # Colonna non presente nel foglio, salta
-            try:
-                ws.update_cell(riga_n, idx, valore)
-                time.sleep(0.15)  # Evita rate limit Google Sheets API
-            except Exception as e:
-                st.warning(f"Errore scrittura {campo} riga {riga_n}: {e}")
+                continue
+            # Indice colonna → lettera (es. 1→A, 27→AA)
+            if idx <= 26:
+                col_letter = chr(64 + idx)
+            else:
+                col_letter = chr(64 + (idx - 1) // 26) + chr(65 + (idx - 1) % 26)
+            batch_data.append({
+                "range": f"{col_letter}{riga_n}",
+                "values": [[str(valore) if valore is not None else ""]]
+            })
+
+    if batch_data:
+        try:
+            ws.batch_update(batch_data, value_input_option="USER_ENTERED")
+            time.sleep(1)
+        except Exception as e:
+            st.warning(f"Batch update fallito ({e}) — scrivo cella per cella con pausa...")
+            for upd in aggiornamenti_batch:
+                riga_n = upd["riga"]
+                for campo, valore in upd.items():
+                    if campo == "riga" or valore is None:
+                        continue
+                    idx = COLONNE_RICHIESTE.get(campo)
+                    if idx is None:
+                        continue
+                    try:
+                        ws.update_cell(riga_n, idx, valore)
+                        time.sleep(1.5)
+                    except Exception as e2:
+                        st.warning(f"Errore scrittura {campo} riga {riga_n}: {e2}")
 
     st.success(f"✅ Foglio '{nome_foglio}' aggiornato.")
 
