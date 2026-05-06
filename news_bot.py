@@ -95,6 +95,18 @@ except Exception as e:
 # 2. FUNZIONI DI SUPPORTO
 # ══════════════════════════════════════════════════════════════
 
+def safe_int(val, default=0) -> int:
+    """Converte in int in modo sicuro — gestisce None, stringa vuota, #N/A, float."""
+    if val is None:
+        return default
+    try:
+        s = str(val).strip()
+        if not s or s.startswith("#"):
+            return default
+        return int(float(s))
+    except (ValueError, TypeError):
+        return default
+
 def is_ashare(ticker: str) -> bool:
     """Blocca i ticker A-share cinesi (Shanghai .SS / Shenzhen .SZ)."""
     t = ticker.upper()
@@ -364,8 +376,8 @@ if st.button("🚀 AVVIA AGGIORNAMENTO", use_container_width=True, type="primary
     if nome_foglio == "Database":
         pat_totali = []
         for riga in records:
-            g = int(riga.get("Brevetti_Granted", 0) or 0)
-            p = int(riga.get("Brevetti_Pending", 0) or 0)
+            g = safe_int(riga.get("Brevetti_Granted", 0))
+            p = safe_int(riga.get("Brevetti_Pending", 0))
             pat_totali.append(g + p)
         pat_max_globale = max(pat_totali) if pat_totali else 1
 
@@ -412,10 +424,12 @@ if st.button("🚀 AVVIA AGGIORNAMENTO", use_container_width=True, type="primary
         st.caption(f"Market Cap: ${mc_str} | ADTV: ${adtv_str} | Float: {ff_str}")
 
         # ── Brevetti USPTO (solo Database) ───────────────────
-        brevetti_granted = int(riga.get("Brevetti_Granted", 0) or 0)
-        brevetti_pending = int(riga.get("Brevetti_Pending", 0) or 0)
+        brevetti_granted = 0
+        brevetti_pending = 0
 
         if nome_foglio == "Database" and azienda:
+            brevetti_granted = safe_int(riga.get("Brevetti_Granted", 0))
+            brevetti_pending = safe_int(riga.get("Brevetti_Pending", 0))
 
             brev = get_brevetti_uspto(azienda)
             if not brev["errore"]:
@@ -429,7 +443,11 @@ if st.button("🚀 AVVIA AGGIORNAMENTO", use_container_width=True, type="primary
                 pat_max_globale = tot_brev
 
         # ── Calcolo GES (solo Database) ───────────────────────
-        ges_score = float(riga.get("GES_Score", 0) or 0)
+        ges_score = 0.0
+        try:
+            ges_score = float(riga.get("GES_Score", 0) or 0)
+        except (ValueError, TypeError):
+            ges_score = 0.0
         if nome_foglio == "Database" and tier in GES_COEFFICIENTI:
             # Legge Rev_Grafene_Pct se presente nel foglio
             rev_pct_raw = riga.get("Rev_Grafene_Pct", None)
