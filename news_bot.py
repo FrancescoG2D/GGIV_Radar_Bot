@@ -193,7 +193,7 @@ def get_dati_yahoo(ticker: str) -> dict:
     return risultato
 
 
-def get_brevetti_uspto(nome_azienda: str) -> dict:
+def get_brevetti_uspto(nome_azienda: str, max_tentativi: int = 3) -> dict:
     """
     Interroga l'API pubblica USPTO (PatentsView) per contare:
     - Brevetti Granted (concessi)
@@ -201,16 +201,45 @@ def get_brevetti_uspto(nome_azienda: str) -> dict:
 
     API gratuita, nessuna chiave richiesta.
     Documentazione: https://patentsview.org/apis/api-endpoints/patents
+
+    Miglioramenti v2.1:
+    - Retry automatico con backoff esponenziale
+    - Fallback su ricerca parziale se la ricerca esatta fallisce
+    - Gestione rate limit 429
     """
     risultato = {"granted": 0, "pending": 0, "errore": None}
 
-    # Pulisce il nome per la ricerca (rimuove Inc., Ltd., Corp. ecc.)
+    # Pulizia nome (rimuove suffissi legali)
     nome_pulito = (nome_azienda
                    .replace(" Inc.", "").replace(" Inc", "")
                    .replace(" Ltd.", "").replace(" Ltd", "")
                    .replace(" Corp.", "").replace(" Corp", "")
-                   .replace(" S.A.", "").replace(" AG", "")
-                   .replace(" plc", "").strip())
+                   .replace(" S.A.", "").replace(" S.A", "")
+                   .replace(" AG", "").replace(" plc", "")
+                   .replace(" SE", "").replace(" NV", "")
+                   .strip())
+
+    def _fetch_with_retry(url, params, campo_count, tentativi=max_tentativi):
+        """Esegue GET con retry e backoff su 429/errori di rete."""
+        for i in range(tentativi):
+            try:
+                r = requests.get(url, params=params, timeout=12)
+                if r.status_code == 200:
+                    data = r.json()
+                    return data.get(campo_count, 0) or 0
+                elif r.status_code == 429:
+                    # Rate limit: aspetta più a lungo
+                    time.sleep(5 * (i + 1))
+                elif r.status_code in (500, 502, 503, 504):
+                    time.sleep(2 ** i)
+                else:
+                    # Errore non recuperabile
+                    return 0
+            except requests.exceptions.Timeout:
+                time.sleep(2 ** i)
+            except Exception:
+                time.sleep(2 ** i)
+        return 0
 
     # ── Brevetti Granted ─────────────────────────────────────
     try:
@@ -220,14 +249,23 @@ def get_brevetti_uspto(nome_azienda: str) -> dict:
             "f": '["patent_id","patent_date","assignee_organization"]',
             "o": '{"per_page": 1}',
         }
-        r = requests.get(url_granted, params=params, timeout=10)
-        if r.status_code == 200:
-            data = r.json()
-            risultato["granted"] = data.get("total_patent_count", 0) or 0
+        count = _fetch_with_retry(url_granted, params, "total_patent_count")
+        risultato["granted"] = count
+
+        # Fallback: se 0 risultati, prova con la prima parola del nome
+        if count == 0 and len(nome_pulito.split()) > 1:
+            prima_parola = nome_pulito.split()[0]
+            params_fallback = {
+                "q": f'{{"assignee_organization": "{prima_parola}"}}',
+                "f": '["patent_id","assignee_organization"]',
+                "o": '{"per_page": 1}',
+            }
+            count_fb = _fetch_with_retry(url_granted, params_fallback, "total_patent_count")
+            risultato["granted"] = count_fb
     except Exception as e:
         risultato["errore"] = f"Granted: {e}"
 
-    time.sleep(0.5)  # Rispetta i rate limit USPTO
+    time.sleep(0.8)  # Rispetta rate limit USPTO
 
     # ── Brevetti Pending (Publication API) ───────────────────
     try:
@@ -237,10 +275,8 @@ def get_brevetti_uspto(nome_azienda: str) -> dict:
             "f": '["publication_id","assignee_organization"]',
             "o": '{"per_page": 1}',
         }
-        r = requests.get(url_pending, params=params, timeout=10)
-        if r.status_code == 200:
-            data = r.json()
-            risultato["pending"] = data.get("total_publication_count", 0) or 0
+        count = _fetch_with_retry(url_pending, params, "total_publication_count")
+        risultato["pending"] = count
     except Exception as e:
         if risultato["errore"]:
             risultato["errore"] += f" | Pending: {e}"
